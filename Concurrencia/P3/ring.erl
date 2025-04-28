@@ -1,46 +1,49 @@
 -module(ring).
+-export([start/1, send/3, stop/1, process/2]).
 
--export([start/1, send/3, stop/1]).
-
+%% Inicia el anillo con N procesos
 start(N) when N > 0 ->
-    First_pid = spawn(fun() -> process_loop(N, 0) end),
-    create_ring(First_pid, First_pid, 1, N),
-    First_pid.
+    Pids = spawn_processes(N),
+    link_processes(Pids),
+    hd(Pids).
 
-create_ring(First_pid, Prev_pid, Count, N) when N > 0 ->
-    Pid = spawn(fun() -> process_loop(Count, undefined) end),
-    Prev_pid ! {set_next, Pid},
-    create_ring(First_pid, Pid, Count + 1, N);
-create_ring(First_pid, Last_pid, N, N) ->
-    Last_pid ! {set_next, First_pid}.
+%% Crea N procesos y los devuelve en una lista
+spawn_processes(N) ->
+    [spawn(?MODULE, process, [Num, undefined]) || Num <- lists:seq(0, N - 1)].
 
-process_loop(Id, Next_pid) ->
+%% Enlaza los procesos en un anillo
+link_processes([First | Rest]) ->
+    link_processes([First | Rest], First).
+
+link_processes([Pid], First) -> Pid ! {set_next, First};
+link_processes([Pid, Next | Rest], First) ->
+    Pid ! {set_next, Next},
+    link_processes([Next | Rest], First).
+
+%% Bucle principal del proceso
+loop(Number, NextPid) ->
     receive
-        {set_next, Next} ->
-            process_loop(Id, Next);
-        {message, Remaining_count, Msg} ->
-            io:format("~p receiving message ~p with ~p left~n", [Id, Msg, Remaining_count]),
-            if Remaining_count > 0 ->
-                   Next_pid ! {message, Remaining_count - 1, Msg};
-               Remaining_count == 0 ->
-                   io:format("~p received last message ~p~n", [Id, Msg]);
-               true ->
-                   ok
-            end,
-            process_loop(Id, Next_pid);
+        {msg, Count, Msg} when Count > 0 ->
+            io:format("~p recibió ~p, quedan ~p~n", [Number, Msg, Count - 1]),
+            NextPid ! {msg, Count - 1, Msg},
+            loop(Number, NextPid);
         stop ->
-            case Next_pid of
-                undefined ->
-                    ok;
-                _ ->
-                    Next_pid ! stop
-            end
+            io:format("Proceso ~p deteniéndose~n", [Number]),
+            NextPid ! stop
     end.
 
-send(Pid, N, Msg) when N >= 0 ->
-    Pid ! {message, N, Msg},
+%% Proceso inicial esperando su siguiente PID
+process(Number, _) ->
+    receive
+        {set_next, NextPid} -> loop(Number, NextPid)
+    end.
+
+%% Envía un mensaje al anillo
+send(Pid, Count, Msg) when Count > 0 ->
+    Pid ! {msg, Count, Msg},
     ok.
 
+%% Detiene el anillo
 stop(Pid) ->
     Pid ! stop,
     ok.
